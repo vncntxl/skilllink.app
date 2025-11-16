@@ -4,13 +4,13 @@ import { getAuth } from "firebase/auth";
 
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-  apiKey: "AIzaSyAqA70egZWbvZZb0zkmAWDpGAECvoJELhg",
+  apiKey: "",
   authDomain: "skilllink-883c1.firebaseapp.com",
   projectId: "skilllink-883c1",
   storageBucket: "skilllink-883c1.firebasestorage.app",
   messagingSenderId: "838083907360",
   appId: "1:838083907360:web:99963305de4ec05cbb5145",
-  measurementId: "G-RM0K1N8JD4"
+  measurementId: "G-RM0K1N8JD4",
 };
 
 const app = initializeApp(firebaseConfig);
