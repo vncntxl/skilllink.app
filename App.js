@@ -11,32 +11,13 @@ import RegisterScreen from "./screens/RegisterScreen";
 import HomeScreen from "./screens/HomeScreen";
 import ProfilesScreen from "./screens/ProfilesScreen";
 import ProfileDetailScreen from "./screens/ProfileDetailScreen";
-
-// Simple placeholder screens for now
-import { View, Text } from "react-native";
-
-function PlaceholderScreen({ title }) {
-  return (
-    <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-      <Text>{title} screen coming soon</Text>
-    </View>
-  );
-}
-
-function EventsScreen() {
-  return <PlaceholderScreen title="Events" />;
-}
-function ConnectionsScreen() {
-  return <PlaceholderScreen title="Connections" />;
-}
-function FeedbackScreen() {
-  return <PlaceholderScreen title="Feedback" />;
-}
+import EventsScreen from "./screens/EventsScreen";
+import ConnectionsScreen from "./screens/ConnectionsScreen";
+import FeedbackScreen from "./screens/FeedbackScreen";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// Bottom tab navigator (like your design)
 function MainTabs() {
   return (
     <Tab.Navigator
