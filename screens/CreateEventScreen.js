@@ -1,4 +1,3 @@
-// screens/FeedbackScreen.js
 import React, { useState, useEffect } from "react";
 import {
   View,
@@ -11,20 +10,11 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "../styles/colors";
-import {
-  collection,
-  addDoc,
-  getDocs,
-  query,
-  where,
-  doc,
-  getDoc,
-} from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
 import { auth, db } from "../firebaseConfig";
-import { onAuthStateChanged } from "firebase/auth";
 
-export default function FeedbackScreen() {
-  const [entries, setEntries] = useState([]);
+export default function FeedbackScreen({ navigation }) {
+  const [entries, setEntries] = useState([]); // FIXED
   const [showForm, setShowForm] = useState(false);
 
   // form fields
@@ -32,73 +22,35 @@ export default function FeedbackScreen() {
   const [topicsText, setTopicsText] = useState("");
   const [reflection, setReflection] = useState("");
   const [rating, setRating] = useState(0);
-  const [userName, setUserName] = useState("");
 
   //-------------------------------------------------
-  // FETCH USER + FEEDBACK WHEN AUTH CHANGES
+  // FETCH FEEDBACK FROM FIRESTORE ON LOAD
   //-------------------------------------------------
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!user) return;
-
-      const uid = user.uid;
-      let nameFromDb = "";
-
-      // Try to get the user's name from Firestore
-      try {
-        const userRef = doc(db, "users", uid);
-        const snap = await getDoc(userRef);
-        if (snap.exists()) {
-          nameFromDb = snap.data().name || "";
-        }
-      } catch (err) {
-        console.log("Fetch user name error:", err);
-      }
-
-      // Fallback: use displayName or email prefix
-      if (!nameFromDb) {
-        nameFromDb =
-          user.displayName ||
-          (user.email ? user.email.split("@")[0] : "Reflection Entry");
-      }
-
-      setUserName(nameFromDb);
-
-      // Load this user's feedback entries
-      await fetchFeedback(uid);
-    });
-
-    return unsubscribe;
+    fetchFeedback();
   }, []);
 
-  const fetchFeedback = async (uidParam) => {
+  const fetchFeedback = async () => {
     try {
-      const uid = uidParam || auth.currentUser?.uid;
-      if (!uid) return;
+      const q = query(
+        collection(db, "feedback"),
+        where("userId", "==", auth.currentUser.uid)
+      );
 
-      const q = query(collection(db, "feedback"), where("userId", "==", uid));
       const snapshot = await getDocs(q);
-
-      const list = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
+      const list = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
       }));
 
-      // newest first based on createdAt, if it exists
-      list.sort((a, b) => {
-        const aDate = a.createdAt?.toDate?.() || 0;
-        const bDate = b.createdAt?.toDate?.() || 0;
-        return bDate - aDate;
-      });
-
-      setEntries(list);
+      setEntries(list.reverse()); // newest first
     } catch (error) {
       console.log("Fetch Feedback Error:", error);
     }
   };
 
   //-------------------------------------------------
-  // SAVE FEEDBACK
+  // SAVE FEEDBACK TO FIRESTORE
   //-------------------------------------------------
   const handleSave = async () => {
     if (!sessionDate || !reflection || rating === 0) {
@@ -115,25 +67,11 @@ export default function FeedbackScreen() {
       .filter(Boolean);
 
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        Alert.alert("Not logged in", "Please log in again.");
-        return;
-      }
-
-      const uid = user.uid;
-
-      const nameToSave =
-        userName ||
-        user.displayName ||
-        (user.email ? user.email.split("@")[0] : "Reflection Entry");
-
       await addDoc(collection(db, "feedback"), {
-        userId: uid,
-        userName: nameToSave,
-        sessionDate, // plain string from TextInput
+        userId: auth.currentUser.uid,
+        date: sessionDate,
         topics: topicsArray,
-        reflection,
+        notes: reflection,
         rating,
         createdAt: new Date(),
       });
@@ -141,10 +79,9 @@ export default function FeedbackScreen() {
       Alert.alert("Success", "Reflection saved!");
       resetForm();
       setShowForm(false);
-      fetchFeedback(uid); // refresh list
+      fetchFeedback(); // reload list
     } catch (error) {
       console.log("Save Feedback Error:", error);
-      Alert.alert("Error", "Could not save feedback.");
     }
   };
 
@@ -183,9 +120,8 @@ export default function FeedbackScreen() {
       {entries.map((entry) => (
         <View key={entry.id} style={styles.card}>
           <View style={styles.cardHeaderRow}>
-            <Text style={styles.mentorName}>
-              {entry.userName || "Reflection Entry"}
-            </Text>
+            <Text style={styles.mentorName}>Reflection Entry</Text>
+
             <View style={styles.ratingWrapper}>
               <Ionicons
                 name="star"
@@ -204,7 +140,7 @@ export default function FeedbackScreen() {
               color={Colors.textGray}
               style={{ marginRight: 4 }}
             />
-            <Text style={styles.metaText}>{entry.sessionDate}</Text>
+            <Text style={styles.metaText}>{entry.date}</Text>
           </View>
 
           {entry.topics?.length > 0 && (
@@ -230,7 +166,7 @@ export default function FeedbackScreen() {
           )}
 
           <View style={styles.notesBox}>
-            <Text style={styles.notesText}>{entry.reflection}</Text>
+            <Text style={styles.notesText}>{entry.notes}</Text>
           </View>
         </View>
       ))}
@@ -238,7 +174,7 @@ export default function FeedbackScreen() {
   );
 
   //-------------------------------------------------
-  // FORM VIEW (no DateTimePicker, just TextInput)
+  // FORM VIEW
   //-------------------------------------------------
   const renderFormView = () => (
     <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
@@ -252,10 +188,7 @@ export default function FeedbackScreen() {
 
         <TouchableOpacity
           style={styles.cancelChip}
-          onPress={() => {
-            resetForm();
-            setShowForm(false);
-          }}
+          onPress={() => setShowForm(false)}
         >
           <Text style={styles.cancelChipText}>Cancel</Text>
         </TouchableOpacity>
@@ -264,20 +197,18 @@ export default function FeedbackScreen() {
       <View style={styles.formCard}>
         <Text style={styles.formLabel}>Session Date</Text>
         <TextInput
-          placeholder="e.g. 19/11/2025"
+          placeholder="e.g. 01/11/2025"
           style={styles.input}
           value={sessionDate}
           onChangeText={setSessionDate}
-          placeholderTextColor={Colors.textGray}
         />
 
         <Text style={styles.formLabel}>Topics (comma-separated)</Text>
         <TextInput
-          placeholder="e.g. UI Design, User Research"
+          placeholder="e.g. UI, Research"
           style={styles.input}
           value={topicsText}
           onChangeText={setTopicsText}
-          placeholderTextColor={Colors.textGray}
         />
 
         <Text style={styles.formLabel}>Reflection</Text>
@@ -285,10 +216,9 @@ export default function FeedbackScreen() {
           style={[styles.input, styles.inputMultiline]}
           multiline
           textAlignVertical="top"
-          placeholder="What did you learn? What insights did you gain?"
+          placeholder="What did you learn?"
           value={reflection}
           onChangeText={setReflection}
-          placeholderTextColor={Colors.textGray}
         />
 
         <Text style={styles.formLabel}>Rating</Text>
@@ -372,10 +302,6 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 16,
     elevation: 2,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 8,
   },
   cardHeaderRow: {
     flexDirection: "row",
@@ -399,20 +325,8 @@ const styles = StyleSheet.create({
     color: "#92400E",
     fontWeight: "700",
   },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 2,
-  },
-  metaText: {
-    fontSize: 12,
-    color: Colors.textGray,
-  },
-  topicRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    marginTop: 8,
-  },
+  metaRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
+  topicRow: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
   topicPill: {
     backgroundColor: "#F3F4F6",
     paddingHorizontal: 8,
@@ -430,7 +344,7 @@ const styles = StyleSheet.create({
   },
   notesText: { color: "#78350F", fontSize: 13, lineHeight: 18 },
 
-  // form styles
+  // form
   formCard: {
     backgroundColor: Colors.bgWhite,
     borderRadius: 18,
@@ -442,7 +356,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 8,
     marginBottom: 4,
-    color: Colors.textDark,
   },
   input: {
     backgroundColor: "#F9FAFB",

@@ -1,4 +1,5 @@
-import React from "react";
+// screens/HomeScreen.js
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,13 +10,59 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "../styles/colors";
+import { auth, db } from "../firebaseConfig";
+import { doc, getDoc } from "firebase/firestore";
 
 export default function HomeScreen({ navigation }) {
+  const [name, setName] = useState("");
+  const [isLoadingName, setIsLoadingName] = useState(true);
+
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const uid = auth.currentUser?.uid;
+        if (!uid) {
+          setName("SkillLink user");
+          return;
+        }
+
+        const ref = doc(db, "users", uid);
+        const snap = await getDoc(ref);
+
+        if (snap.exists()) {
+          const data = snap.data();
+          // prefer saved name, fallback to email, then generic
+          setName(data.name || auth.currentUser.email || "SkillLink user");
+        } else {
+          // no user doc yet — fallback to auth info
+          setName(auth.currentUser.email || "SkillLink user");
+        }
+      } catch (err) {
+        console.log("Error loading user for Home:", err);
+        setName("SkillLink user");
+      } finally {
+        setIsLoadingName(false);
+      }
+    };
+
+    loadUser();
+  }, []);
+
   const subjects = [
     { id: 1, name: "Design", count: 0, icon: "color-palette-outline" },
     { id: 2, name: "Programming", count: 0, icon: "laptop-outline" },
-    { id: 3, name: "Business", count: 0, icon: "briefcase-outline" },
-    { id: 4, name: "Languages", count: 0, icon: "chatbubble-ellipses-outline" },
+    {
+      id: 3,
+      name: "Business",
+      count: 0,
+      icon: "briefcase-outline",
+    },
+    {
+      id: 4,
+      name: "Languages",
+      count: 0,
+      icon: "chatbubble-ellipses-outline",
+    },
   ];
 
   return (
@@ -23,7 +70,7 @@ export default function HomeScreen({ navigation }) {
       {/* Welcome Card */}
       <View style={styles.welcomeCard}>
         <Text style={styles.welcomeBadge}>
-          ✨ Welcome back, Vincent Xaviera Lee!
+          ✨ Welcome back, {isLoadingName ? "Loading..." : name}
         </Text>
         <Text style={styles.welcomeTitle}>Connect. Learn. Grow.</Text>
         <Text style={styles.welcomeQuote}>

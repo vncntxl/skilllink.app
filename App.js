@@ -1,11 +1,12 @@
-// App.js
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors } from "./styles/colors";
+import { auth } from "./firebaseConfig";
+import { onAuthStateChanged } from "firebase/auth";
 
+// Screens
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
 import HomeScreen from "./screens/HomeScreen";
@@ -25,21 +26,30 @@ function MainTabs() {
         headerShown: false,
         tabBarActiveTintColor: "#1D6F42",
         tabBarInactiveTintColor: "#777",
-        tabBarStyle: {
-          height: 60,
-          paddingTop: 6,
-        },
+        tabBarStyle: { height: 60, paddingTop: 6 },
+
         tabBarIcon: ({ color, size }) => {
-          let iconName;
+          let icon;
 
-          if (route.name === "Home") iconName = "home-outline";
-          else if (route.name === "Profiles") iconName = "people-outline";
-          else if (route.name === "Events") iconName = "calendar-outline";
-          else if (route.name === "Connections") iconName = "link-outline";
-          else if (route.name === "Feedback")
-            iconName = "chatbubble-ellipses-outline";
+          switch (route.name) {
+            case "Home":
+              icon = "home-outline";
+              break;
+            case "Profiles":
+              icon = "people-outline";
+              break;
+            case "Events":
+              icon = "calendar-outline";
+              break;
+            case "Connections":
+              icon = "link-outline";
+              break;
+            case "Feedback":
+              icon = "chatbubble-ellipses-outline";
+              break;
+          }
 
-          return <Ionicons name={iconName} size={size} color={color} />;
+          return <Ionicons name={icon} size={size} color={color} />;
         },
       })}
     >
@@ -53,29 +63,38 @@ function MainTabs() {
 }
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // 🔥 FIX: NO AWAIT OUTSIDE FUNCTION
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  if (loading) return null; // prevents blank screen flicker
+
   return (
     <NavigationContainer>
-      <Stack.Navigator initialRouteName="Login">
-        <Stack.Screen
-          name="Login"
-          component={LoginScreen}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="Register"
-          component={RegisterScreen}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="Main"
-          component={MainTabs}
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen
-          name="ProfileDetail"
-          component={ProfileDetailScreen}
-          options={{ headerShown: false }}
-        />
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
+            <Stack.Screen
+              name="ProfileDetail"
+              component={ProfileDetailScreen}
+            />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Register" component={RegisterScreen} />
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
