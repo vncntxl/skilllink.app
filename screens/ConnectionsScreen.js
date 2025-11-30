@@ -1,31 +1,35 @@
-// screens/ConnectionsScreen.js
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
+  FlatList,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors } from "../styles/colors";
 import { auth, db } from "../firebaseConfig";
 import {
   collection,
+  getDocs,
   query,
   where,
-  getDocs,
-  updateDoc,
   doc,
+  getDoc,
+  updateDoc,
 } from "firebase/firestore";
+import { Colors } from "../styles/colors";
 
-export default function ConnectionsScreen() {
-  const [loading, setLoading] = useState(true);
-  const [incomingRequests, setIncomingRequests] = useState([]);
-  const [sentRequests, setSentRequests] = useState([]);
+const TABS = [
+  { key: "all", label: "All" },
+  { key: "pending", label: "Pending" },
+  { key: "active", label: "Active" },
+];
+
+export default function ConnectionsScreen({ navigation }) {
+  const [selectedTab, setSelectedTab] = useState("all");
   const [connections, setConnections] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const currentUser = auth.currentUser;
 
@@ -37,115 +41,235 @@ export default function ConnectionsScreen() {
   const loadConnections = async () => {
     try {
       setLoading(true);
+
       const uid = currentUser.uid;
+      const ref = collection(db, "connections");
 
-      const connectionsRef = collection(db, "connections");
-
-      // Firestore has no OR, so we query both sides
-      const [snapAsReceiver, snapAsRequester] = await Promise.all([
-        getDocs(query(connectionsRef, where("receiverId", "==", uid))),
-        getDocs(query(connectionsRef, where("requesterId", "==", uid))),
+      const [snapReq, snapRec] = await Promise.all([
+        getDocs(query(ref, where("requesterId", "==", uid))),
+        getDocs(query(ref, where("receiverId", "==", uid))),
       ]);
 
-      const raw = [...snapAsReceiver.docs, ...snapAsRequester.docs].map(
-        (d) => ({
-          id: d.id,
-          ...d.data(),
-        })
+      const rawConns = [
+        ...snapReq.docs.map((d) => ({ id: d.id, ...d.data() })),
+        ...snapRec.docs.map((d) => ({ id: d.id, ...d.data() })),
+      ];
+
+      // collect all other user ids
+      const otherIds = [
+        ...new Set(
+          rawConns.map((c) =>
+            c.requesterId === uid ? c.receiverId : c.requesterId
+          )
+        ),
+      ];
+
+      // fetch users
+      const userDocs = await Promise.all(
+        otherIds.map((id) => getDoc(doc(db, "users", id)))
       );
 
-      // Helper: group by current user's perspective
-      const incoming = raw.filter(
-        (c) => c.receiverId === uid && c.status === "pending"
-      );
-      const sent = raw.filter(
-        (c) => c.requesterId === uid && c.status === "pending"
-      );
-      const accepted = raw.filter((c) => c.status === "accepted");
-
-      // Now we need to attach "other user" details (name, role)
-      const uniqueUserIds = new Set();
-      raw.forEach((c) => {
-        if (c.requesterId !== uid) uniqueUserIds.add(c.requesterId);
-        if (c.receiverId !== uid) uniqueUserIds.add(c.receiverId);
+      const userMap = {};
+      userDocs.forEach((snap) => {
+        if (snap.exists()) {
+          userMap[snap.id] = { id: snap.id, ...snap.data() };
+        }
       });
 
-      const usersById = {};
-      if (uniqueUserIds.size > 0) {
-        const usersRef = collection(db, "users");
-        const allUsersSnap = await getDocs(usersRef);
-        allUsersSnap.forEach((u) => {
-          if (uniqueUserIds.has(u.id)) {
-            usersById[u.id] = { id: u.id, ...u.data() };
-          }
-        });
-      }
+      const enriched = rawConns.map((c) => {
+        const otherUserId =
+          c.requesterId === uid ? c.receiverId : c.requesterId;
+        return {
+          ...c,
+          otherUserId,
+          otherUser: userMap[otherUserId] || null,
+          isIncoming: c.receiverId === uid,
+        };
+      });
 
-      // decorate each connection with "otherUser"
-      const decorate = (arr) =>
-        arr.map((c) => {
-          const otherId = c.requesterId === uid ? c.receiverId : c.requesterId;
-          return {
-            ...c,
-            otherUser: usersById[otherId] || {
-              id: otherId,
-              name: "SkillLink user",
-            },
-          };
-        });
-
-      setIncomingRequests(decorate(incoming));
-      setSentRequests(decorate(sent));
-      setConnections(decorate(accepted));
+      setConnections(enriched);
     } catch (err) {
-      console.log("Load connections error:", err);
-      Alert.alert("Error", "Could not load connections.");
+      console.log("loadConnections error:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAccept = async (connectionId) => {
+  const handleUpdateStatus = async (connId, status) => {
     try {
-      const ref = doc(db, "connections", connectionId);
-      await updateDoc(ref, { status: "accepted" });
-      Alert.alert("Connected", "You are now connected!");
-      loadConnections();
+      const ref = doc(db, "connections", connId);
+      await updateDoc(ref, { status });
+
+      setConnections((prev) =>
+        prev.map((c) => (c.id === connId ? { ...c, status } : c))
+      );
     } catch (err) {
-      console.log("Accept error:", err);
-      Alert.alert("Error", "Could not accept the request.");
+      console.log("update status error:", err);
     }
   };
 
-  const handleDecline = async (connectionId) => {
-    try {
-      const ref = doc(db, "connections", connectionId);
-      await updateDoc(ref, { status: "declined" });
-      Alert.alert("Request declined");
-      loadConnections();
-    } catch (err) {
-      console.log("Decline error:", err);
-      Alert.alert("Error", "Could not decline the request.");
+  const handleOpenChat = (conn) => {
+    const other = conn.otherUser || {};
+    const name =
+      other.fullName ||
+      other.name ||
+      other.displayName ||
+      other.email ||
+      "SkillLink user";
+
+    navigation.navigate("Chat", {
+      connectionId: conn.id,
+      otherUserId: conn.otherUserId,
+      otherUserName: name,
+    });
+  };
+
+  const counts = useMemo(() => {
+    const pending = connections.filter((c) => c.status === "pending").length;
+    const active = connections.filter((c) => c.status === "accepted").length;
+    return {
+      all: connections.length,
+      pending,
+      active,
+    };
+  }, [connections]);
+
+  const visibleConnections = useMemo(() => {
+    if (selectedTab === "pending") {
+      return connections.filter((c) => c.status === "pending");
     }
-  };
+    if (selectedTab === "active") {
+      return connections.filter((c) => c.status === "accepted");
+    }
+    return connections;
+  }, [connections, selectedTab]);
 
-  const handleOpenChat = (otherUser) => {
-    // TODO: later navigate to Chat screen
-    Alert.alert(
-      "Chat coming soon",
-      `This would open a chat with ${otherUser.name || "your connection"}.`
-    );
-  };
+  const renderConnection = ({ item }) => {
+    const other = item.otherUser || {};
+    const name =
+      other.fullName ||
+      other.name ||
+      other.displayName ||
+      other.email ||
+      "SkillLink user";
 
-  if (!currentUser) {
+    const role = (other.role || "").toLowerCase();
+    const isMentor = role === "mentor";
+    const subject = other.subject || other.category || "General";
+
+    const isPending = item.status === "pending";
+    const isActive = item.status === "accepted";
+    const directionLabel = item.isIncoming ? "Requested by" : "You requested";
+
+    const showActions = isPending && item.isIncoming;
+
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.infoText}>
-          Please log in again to view your connections.
-        </Text>
+      <View style={styles.card}>
+        <View style={styles.cardLeft}>
+          <View
+            style={[
+              styles.avatar,
+              isMentor ? styles.avatarMentor : styles.avatarStudent,
+            ]}
+          >
+            <Ionicons
+              name={isMentor ? "school-outline" : "person-outline"}
+              size={22}
+              color={isMentor ? Colors.primaryGreen : Colors.primaryGold}
+            />
+          </View>
+
+          <View>
+            <Text style={styles.name}>{name}</Text>
+            <Text style={styles.subtitle}>
+              {isMentor ? "Mentor · " : "Student · "}
+              {subject}
+            </Text>
+
+            <View
+              style={[styles.roleBadge, isMentor && styles.roleBadgeMentor]}
+            >
+              <Ionicons
+                name={isMentor ? "star-outline" : "book-outline"}
+                size={13}
+                color={isMentor ? Colors.primaryGreen : Colors.primaryGold}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                style={[
+                  styles.roleBadgeText,
+                  isMentor && styles.roleBadgeTextMentor,
+                ]}
+              >
+                {isMentor ? "Mentor" : "Student"}
+              </Text>
+            </View>
+
+            <Text style={styles.directionText}>{directionLabel}</Text>
+          </View>
+        </View>
+
+        <View style={styles.cardRight}>
+          <View
+            style={[
+              styles.statusPill,
+              isPending && styles.pendingPill,
+              isActive && styles.activePill,
+            ]}
+          >
+            <Text style={styles.statusText}>
+              {isPending ? "Pending" : isActive ? "Active" : item.status}
+            </Text>
+          </View>
+
+          {showActions && (
+            <View style={styles.actionsRow}>
+              <TouchableOpacity
+                style={styles.acceptBtn}
+                onPress={() => handleUpdateStatus(item.id, "accepted")}
+              >
+                <Ionicons
+                  name="checkmark"
+                  size={14}
+                  color="#fff"
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={styles.actionText}>Accept</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.declineBtn}
+                onPress={() => handleUpdateStatus(item.id, "declined")}
+              >
+                <Ionicons
+                  name="close"
+                  size={14}
+                  color={Colors.textDark}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={styles.declineText}>Decline</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {isActive && (
+            <TouchableOpacity
+              style={styles.messageBtn}
+              onPress={() => handleOpenChat(item)}
+            >
+              <Ionicons
+                name="chatbubble-ellipses-outline"
+                size={14}
+                color="#fff"
+                style={{ marginRight: 4 }}
+              />
+              <Text style={styles.messageText}>Message</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     );
-  }
+  };
 
   if (loading) {
     return (
@@ -155,174 +279,56 @@ export default function ConnectionsScreen() {
     );
   }
 
+  const showEmpty = visibleConnections.length === 0;
+
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={{ paddingBottom: 24 }}
-    >
+    <View style={styles.container}>
       {/* Header */}
-      <View style={styles.headerBlock}>
-        <View style={styles.iconCircle}>
-          <Ionicons
-            name="people-outline"
-            size={22}
-            color={Colors.primaryGreen}
-          />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Connections</Text>
-          <Text style={styles.headerSubtitle}>
-            Manage requests and stay in touch with your mentors and peers.
+      <View className="header">
+        <Text style={styles.title}>My Connections</Text>
+        <Text style={styles.subtitleHeader}>
+          Manage your mentorship relationships
+        </Text>
+      </View>
+
+      {/* Tabs */}
+      <View style={styles.tabsRow}>
+        {TABS.map((tab) => {
+          const isActive = selectedTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.tab, isActive && styles.tabActive]}
+              onPress={() => setSelectedTab(tab.key)}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[styles.tabText, isActive && styles.tabTextActive]}
+              >{`${tab.label} (${counts[tab.key] || 0})`}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* Content */}
+      {showEmpty ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyEmoji}>🤝</Text>
+          <Text style={styles.emptyTitle}>No connections yet</Text>
+          <Text style={styles.emptySubtitle}>
+            Start connecting with mentors or students!
           </Text>
         </View>
-      </View>
-
-      {/* Pending requests (incoming) */}
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Pending requests</Text>
-          <View style={styles.badgePill}>
-            <Text style={styles.badgeText}>{incomingRequests.length}</Text>
-          </View>
-        </View>
-
-        {incomingRequests.length === 0 ? (
-          <Text style={styles.emptyText}>No new connection requests.</Text>
-        ) : (
-          incomingRequests.map((req) => (
-            <View key={req.id} style={styles.requestRow}>
-              <View style={styles.userAvatarCircle}>
-                <Ionicons
-                  name="person-outline"
-                  size={20}
-                  color={Colors.primaryGreen}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.userName}>
-                  {req.otherUser.name || "SkillLink user"}
-                </Text>
-                {req.otherUser.role ? (
-                  <Text style={styles.userRole}>{req.otherUser.role}</Text>
-                ) : null}
-              </View>
-              <View style={styles.requestButtonsRow}>
-                <TouchableOpacity
-                  style={styles.acceptBtn}
-                  onPress={() => handleAccept(req.id)}
-                >
-                  <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.declineBtn}
-                  onPress={() => handleDecline(req.id)}
-                >
-                  <Ionicons name="close" size={16} color={Colors.textGray} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
-        )}
-      </View>
-
-      {/* Accepted connections */}
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Your connections</Text>
-          <View
-            style={[styles.badgePill, { backgroundColor: Colors.softGreenBg }]}
-          >
-            <Text style={[styles.badgeText, { color: Colors.primaryGreen }]}>
-              {connections.length}
-            </Text>
-          </View>
-        </View>
-
-        {connections.length === 0 ? (
-          <Text style={styles.emptyText}>
-            You have no active connections yet. Start by browsing profiles and
-            sending a connection request.
-          </Text>
-        ) : (
-          connections.map((conn) => (
-            <View key={conn.id} style={styles.connectionRow}>
-              <View style={styles.userAvatarCircle}>
-                <Ionicons
-                  name="person-circle-outline"
-                  size={26}
-                  color={Colors.primaryGreen}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.userName}>
-                  {conn.otherUser.name || "SkillLink user"}
-                </Text>
-                {conn.otherUser.role ? (
-                  <Text style={styles.userRole}>
-                    {conn.otherUser.role} · Connected
-                  </Text>
-                ) : (
-                  <Text style={styles.userRole}>Connected</Text>
-                )}
-              </View>
-              <TouchableOpacity
-                style={styles.chatBtn}
-                onPress={() => handleOpenChat(conn.otherUser)}
-              >
-                <Ionicons
-                  name="chatbubble-ellipses-outline"
-                  size={16}
-                  color="#FFFFFF"
-                />
-                <Text style={styles.chatBtnText}>Chat</Text>
-              </TouchableOpacity>
-            </View>
-          ))
-        )}
-      </View>
-
-      {/* Sent requests */}
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Requests you sent</Text>
-        </View>
-
-        {sentRequests.length === 0 ? (
-          <Text style={styles.emptyText}>
-            You haven’t sent any connection requests yet.
-          </Text>
-        ) : (
-          sentRequests.map((req) => (
-            <View key={req.id} style={styles.requestRow}>
-              <View style={styles.userAvatarCircle}>
-                <Ionicons
-                  name="person-outline"
-                  size={20}
-                  color={Colors.primaryGold}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.userName}>
-                  {req.otherUser.name || "SkillLink user"}
-                </Text>
-                {req.otherUser.role ? (
-                  <Text style={styles.userRole}>{req.otherUser.role}</Text>
-                ) : null}
-              </View>
-              <View style={styles.pendingPill}>
-                <Ionicons
-                  name="time-outline"
-                  size={14}
-                  color={Colors.textGray}
-                  style={{ marginRight: 4 }}
-                />
-                <Text style={styles.pendingText}>Pending</Text>
-              </View>
-            </View>
-          ))
-        )}
-      </View>
-    </ScrollView>
+      ) : (
+        <FlatList
+          data={visibleConnections}
+          keyExtractor={(item) => item.id}
+          renderItem={renderConnection}
+          contentContainerStyle={{ paddingVertical: 12 }}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
+    </View>
   );
 }
 
@@ -330,7 +336,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.bgLight,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingTop: 24,
   },
   loadingContainer: {
@@ -338,151 +344,206 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bgLight,
     justifyContent: "center",
     alignItems: "center",
-    padding: 16,
   },
-  infoText: {
-    fontSize: 14,
-    color: Colors.textGray,
-    textAlign: "center",
-  },
-  headerBlock: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 18,
-  },
-  iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.softGreenBg,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 10,
-  },
-  headerTitle: {
-    fontSize: 20,
+  title: {
+    fontSize: 24,
     fontWeight: "700",
     color: Colors.textDark,
+    marginBottom: 4,
   },
-  headerSubtitle: {
-    fontSize: 12,
+  subtitleHeader: {
+    fontSize: 13,
     color: Colors.textGray,
-    marginTop: 4,
+    marginBottom: 18,
   },
-  sectionCard: {
+
+  tabsRow: {
+    flexDirection: "row",
+    backgroundColor: "#E5E7EB55",
+    borderRadius: 999,
+    padding: 4,
+    marginBottom: 18,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 7,
+    alignItems: "center",
+    borderRadius: 999,
+  },
+  tabActive: {
+    backgroundColor: Colors.bgWhite,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  tabText: {
+    fontSize: 13,
+    color: Colors.textGray,
+    fontWeight: "500",
+  },
+  tabTextActive: {
+    color: Colors.textDark,
+  },
+
+  card: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     backgroundColor: Colors.bgWhite,
     borderRadius: 18,
-    padding: 16,
-    marginBottom: 16,
+    marginBottom: 10,
     shadowColor: "#000",
     shadowOpacity: 0.03,
+    shadowRadius: 5,
     shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 6,
     elevation: 1,
   },
-  sectionHeaderRow: {
+  cardLeft: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 10,
-  },
-  sectionTitle: {
+    gap: 12,
     flex: 1,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarMentor: {
+    backgroundColor: "#FEF3C7",
+  },
+  avatarStudent: {
+    backgroundColor: "#ECFDF3",
+  },
+  name: {
     fontSize: 15,
     fontWeight: "700",
     color: Colors.textDark,
   },
-  badgePill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: Colors.softYellowBg,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#92400E",
-  },
-  emptyText: {
-    fontSize: 12,
-    color: Colors.textGray,
-  },
-  requestRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 10,
-  },
-  connectionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 10,
-  },
-  userAvatarCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.softGreenBg,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 10,
-  },
-  userName: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: Colors.textDark,
-  },
-  userRole: {
+  subtitle: {
     fontSize: 12,
     color: Colors.textGray,
     marginTop: 2,
+    marginBottom: 4,
   },
-  requestButtonsRow: {
+  roleBadge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-  },
-  acceptBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: Colors.primaryGreen,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 4,
-  },
-  declineBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: Colors.borderLight,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  chatBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.primaryGreen,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    alignSelf: "flex-start",
+    backgroundColor: Colors.primaryGold,
     borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  chatBtnText: {
-    color: "#FFFFFF",
-    fontSize: 12,
+  roleBadgeMentor: {
+    backgroundColor: "#ECFDF3",
+  },
+  roleBadgeText: {
+    fontSize: 11,
     fontWeight: "600",
-    marginLeft: 4,
+    color: "#111827",
   },
-  pendingPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#E5E7EB",
+  roleBadgeTextMentor: {
+    color: Colors.primaryGreen,
+  },
+  directionText: {
+    fontSize: 11,
+    color: Colors.textGray,
+    marginTop: 4,
+  },
+
+  cardRight: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
+  statusPill: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
+    backgroundColor: "#E5E7EB",
+    marginBottom: 6,
   },
-  pendingText: {
-    fontSize: 12,
-    color: Colors.textGray,
+  pendingPill: {
+    backgroundColor: "#FEF3C7",
+  },
+  activePill: {
+    backgroundColor: "#DCFCE7",
+  },
+  statusText: {
+    fontSize: 11,
     fontWeight: "500",
+    color: "#374151",
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 4,
+  },
+  acceptBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#215335", // darker green, similar to your design
+  },
+  declineBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#EEF2FF",
+  },
+  actionText: {
+    fontSize: 11,
+    color: "#fff",
+    fontWeight: "600",
+  },
+  declineText: {
+    fontSize: 11,
+    color: Colors.textDark,
+    fontWeight: "500",
+  },
+  messageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: Colors.primaryGreen,
+  },
+  messageText: {
+    fontSize: 11,
+    color: "#fff",
+    fontWeight: "600",
+  },
+
+  emptyState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyEmoji: {
+    fontSize: 40,
+    marginBottom: 8,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: Colors.textDark,
+    marginBottom: 4,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: Colors.textGray,
+    textAlign: "center",
+    paddingHorizontal: 24,
   },
 });

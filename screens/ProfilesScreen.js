@@ -203,9 +203,18 @@ export default function ProfilesScreen({ navigation }) {
       buttonLabel = "Respond in Connections";
       buttonStyle = styles.pendingButton;
       buttonTextStyle = styles.pendingButtonText;
-      buttonDisabled = true;
+      buttonDisabled = false; // allow press to open Connections tab
       iconName = "mail-unread-outline";
     }
+
+    const handleButtonPress = () => {
+      if (state === "pendingIncoming") {
+        // Jump to Connections tab so user can accept / decline
+        navigation.navigate("Connections");
+      } else {
+        handleConnect(item);
+      }
+    };
 
     return (
       <TouchableOpacity
@@ -256,7 +265,7 @@ export default function ProfilesScreen({ navigation }) {
 
           <TouchableOpacity
             style={buttonStyle}
-            onPress={() => handleConnect(item)}
+            onPress={handleButtonPress}
             disabled={buttonDisabled}
           >
             <Ionicons

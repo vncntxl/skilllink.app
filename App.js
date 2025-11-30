@@ -1,3 +1,4 @@
+// App.js
 import React, { useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -15,6 +16,7 @@ import ProfileDetailScreen from "./screens/ProfileDetailScreen";
 import EventsScreen from "./screens/EventsScreen";
 import ConnectionsScreen from "./screens/ConnectionsScreen";
 import FeedbackScreen from "./screens/FeedbackScreen";
+import ChatScreen from "./screens/ChatScreen";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -47,6 +49,8 @@ function MainTabs() {
             case "Feedback":
               icon = "chatbubble-ellipses-outline";
               break;
+            default:
+              icon = "ellipse-outline";
           }
 
           return <Ionicons name={icon} size={size} color={color} />;
@@ -66,7 +70,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // 🔥 FIX: NO AWAIT OUTSIDE FUNCTION
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -76,7 +79,7 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  if (loading) return null; // prevents blank screen flicker
+  if (loading) return null;
 
   return (
     <NavigationContainer>
@@ -87,6 +90,14 @@ export default function App() {
             <Stack.Screen
               name="ProfileDetail"
               component={ProfileDetailScreen}
+            />
+            <Stack.Screen
+              name="Chat"
+              component={ChatScreen}
+              options={{
+                headerShown: true, // show header for chat
+                title: "Chat",
+              }}
             />
           </>
         ) : (
